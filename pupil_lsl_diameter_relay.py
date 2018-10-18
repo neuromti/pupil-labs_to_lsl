@@ -298,7 +298,11 @@ def _create_notify_lsl_outlet(url):
 
         
 def _create_buffered_lsl_outlet(url, name):
-    """Create 3 channel primitive data outlet"""
+    """Create 5 channel primitive data outlet
+    
+    the five channels are "diameter_0", "diameter_1", "confidence_0", 
+    "confidence_1", "timestamp"
+    """
     stream_info = lsl.StreamInfo(
         name=name,
         type='Pupil Capture',
@@ -312,7 +316,13 @@ def _create_buffered_lsl_outlet(url, name):
     return lsl.StreamOutlet(stream_info) 
 
 def _generate_primitive_sample(payload):
-    """Combine payload's primitive fields into sample"""
+    """Combine payload's primitive fields into sample
+    
+    returns
+    -------
+    sample:tuple[diameter, confidence, timestamp]
+        a three-channel sample of one of the two eyes
+    """
     return (payload.get('diameter', -1.0),
             payload['confidence'],
             payload['timestamp'],
