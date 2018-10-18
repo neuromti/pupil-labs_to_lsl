@@ -202,10 +202,13 @@ class Pupil_Diameter_LSL_Relay(Plugin):
 
             # initial subscription
             if self.relay_pupil:
-                pupil_outlets = self._create_pupil_lsl_outlets()
+                pupil_outlets = _create_buffered_lsl_outlet(
+                                    url=self.g_pool.ipc_sub_url,
+                                    name='Buffered Pupil Diameter')
                 inlet.subscribe(PUPIL_SUB_TOPIC)
             if self.relay_notifications:
-                notification_outlet = self._create_notify_lsl_outlet()
+                notification_outlet = _create_notify_lsl_outlet(
+                                         url=self.g_pool.ipc_sub_url)
                 inlet.subscribe(NOTIFY_SUB_TOPIC)
 
             while True:
@@ -217,13 +220,13 @@ class Pupil_Diameter_LSL_Relay(Plugin):
                             and pupil_outlets):
                         eyeid = payload['id']
                         # push primitive sample
-                        outlet = pupil_outlets[eyeid*2]
-                        sample = self._generate_primitive_sample(payload)
-                        outlet.push_sample(sample)
-                        # push python sample
-                        outlet = pupil_outlets[eyeid*2+1]
-                        outlet.push_sample((repr(payload),))
-                        del outlet  # delete reference
+                        # outlet = pupil_outlets[eyeid*2]
+                        # sample = _generate_primitive_sample(payload)
+                        # outlet.push_sample(sample)
+                        sample = _generate_primitive_sample(payload)
+                        logger.debug('Eye' + str(eyeid) + 
+                                     'Len: ' + str(len(sample)))
+                        # del outlet  # delete reference
 
                     elif (topic.startswith(NOTIFY_SUB_TOPIC)
                           and notification_outlet):
@@ -260,85 +263,58 @@ class Pupil_Diameter_LSL_Relay(Plugin):
         except Exception as e:
             logger.error('Error during relaying data to LSL. '
                          + 'Unloading the plugin...')
-            logger.debug('Error details: %s' % e)
+            logger.error('Error details: %s' % e)
         finally:
             logger.debug('Shutting down background thread...')
             self.thread_pipe = None
             self.alive = False
 
-    def _create_pupil_lsl_outlets(self):
-        """Creates array of pupil outlets
 
-        Returns:
-            list: [eye0.primitive, eye0.python, eye1.primitive, eye1.python]
-        """
-        lsl_outlets = []
-        for eye_id in range(2):
-            lsl_outlets.append(self._create_primitive_lsl_outlet(
-                'Pupil Primitive Data - Eye %i' % eye_id))
-            lsl_outlets.append(self._create_python_repr_lsl_outlet(
-                'Pupil Python Representation - Eye %i' % eye_id))
-        return lsl_outlets
+# %% Helper static functions
+def _append_acquisition_info(streaminfo):
+    """Appends acquisition information to stream description"""
+    acquisition = streaminfo.desc().append_child("acquisition")
+    acquisition.append_child_value("manufacturer", "Pupil Labs")
+    acquisition.append_child_value("source", "Pupil LSL Relay Plugin")
 
-    def _create_notify_lsl_outlet(self):
-        """Creates notification outlet"""
-        notification_info = lsl.StreamInfo(
-            name='Notifications',
-            type='Pupil Capture',
-            channel_count=2,
-            channel_format=lsl.cf_string,
-            source_id='Notifications @ %s' % self.g_pool.ipc_sub_url)
-        self._append_channel_info(notification_info, ("subject",
-                                                      "Python Representation"))
-        self._append_acquisition_info(notification_info)
-        return lsl.StreamOutlet(notification_info)
+def _append_channel_info(streaminfo, channels):
+    """Appends channel information to stream description"""
+    xml_channels = streaminfo.desc().append_child("channels")
+    for channel in channels:
+        xml_channels.append_child("channel").append_child_value("label", 
+                                                                 channel)
+def _create_notify_lsl_outlet(url):
+    """Creates notification outlet"""
+    notification_info = lsl.StreamInfo(
+        name='Notifications',
+        type='Pupil Capture',
+        channel_count=2,
+        channel_format=lsl.cf_string,
+        source_id='Notifications @ %s' % url)
+    _append_channel_info(notification_info, ("subject",
+                                                  "Python Representation"))
+    _append_acquisition_info(notification_info)
+    return lsl.StreamOutlet(notification_info)
 
-    @staticmethod
-    def _append_acquisition_info(streaminfo):
-        """Appends acquisition information to stream description"""
-        acquisition = streaminfo.desc().append_child("acquisition")
-        acquisition.append_child_value("manufacturer", "Pupil Labs")
-        acquisition.append_child_value("source", "Pupil LSL Relay Plugin")
+        
+def _create_buffered_lsl_outlet(url, name):
+    """Create 3 channel primitive data outlet"""
+    stream_info = lsl.StreamInfo(
+        name=name,
+        type='Pupil Capture',
+        channel_count=5,
+        channel_format=lsl.cf_double64,
+        source_id='%s @ %s' % (name, url))
+    _append_channel_info(stream_info,
+                              ("diameter_0", "diameter_1", "confidence_0", 
+                               "confidence_1", "timestamp"))
+    _append_acquisition_info(stream_info)
+    return lsl.StreamOutlet(stream_info) 
 
-    @staticmethod
-    def _append_channel_info(streaminfo, channels):
-        """Appends channel information to stream description"""
-        xml_channels = streaminfo.desc().append_child("channels")
-        for channel in channels:
-            xml_channels.append_child("channel").append_child_value("label",
-                                                                    channel)
-
-    @staticmethod
-    def _generate_primitive_sample(payload):
-        """Combine payload's primitive fields into sample"""
-        return (payload.get('diameter', -1.0),
-                payload['confidence'],
-                payload['timestamp'],
-                payload['norm_pos'][0],
-                payload['norm_pos'][1])
-
-    def _create_primitive_lsl_outlet(self, name):
-        """Create 5 channel primitive data outlet"""
-        stream_info = lsl.StreamInfo(
-            name=name,
-            type='Pupil Capture',
-            channel_count=5,
-            channel_format=lsl.cf_double64,
-            source_id='%s @ %s' % (name, self.g_pool.ipc_sub_url))
-        self._append_channel_info(stream_info,
-                                  ("diameter", "confidence", "timestamp",
-                                   "norm_pos_x", "norm_pos_y"))
-        self._append_acquisition_info(stream_info)
-        return lsl.StreamOutlet(stream_info)
-
-    def _create_python_repr_lsl_outlet(self, name):
-        """Create 1 channel python representation outlet"""
-        stream_info = lsl.StreamInfo(
-            name=name,
-            type='Pupil Capture',
-            channel_count=1,
-            channel_format=lsl.cf_string,
-            source_id='%s @ %s' % (name, self.g_pool.ipc_sub_url))
-        self._append_channel_info(stream_info, ("Python Representation",))
-        self._append_acquisition_info(stream_info)
-        return lsl.StreamOutlet(stream_info)
+def _generate_primitive_sample(payload):
+    """Combine payload's primitive fields into sample"""
+    return (payload.get('diameter', -1.0),
+            payload['confidence'],
+            payload['timestamp'],
+            payload['norm_pos'][0],
+            payload['norm_pos'][1])       
