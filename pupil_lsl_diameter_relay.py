@@ -197,12 +197,13 @@ class Pupil_Diameter_LSL_Relay(Plugin):
             poller.register(pipe, flags=zmq.POLLIN)
             poller.register(inlet.socket, flags=zmq.POLLIN)
 
-            pupil_outlets = None
+            pupil_outlet = None
             notification_outlet = None
-
+                        
             # initial subscription
             if self.relay_pupil:
-                pupil_outlets = _create_buffered_lsl_outlet(
+                pupil_buffer = _create_buffer()
+                pupil_outlet = _create_buffered_lsl_outlet(
                                     url=self.g_pool.ipc_sub_url,
                                     name='Buffered Pupil Diameter')
                 inlet.subscribe(PUPIL_SUB_TOPIC)
@@ -217,15 +218,16 @@ class Pupil_Diameter_LSL_Relay(Plugin):
                 if inlet.socket in items:
                     topic, payload = inlet.recv()
                     if (topic.startswith(PUPIL_SUB_TOPIC)
-                            and pupil_outlets):
-                        eyeid = payload['id']
-                        # push primitive sample
-                        # outlet = pupil_outlets[eyeid*2]
-                        # sample = _generate_primitive_sample(payload)
-                        # outlet.push_sample(sample)
-                        sample = _generate_primitive_sample(payload)
-                        logger.debug('Eye' + str(eyeid) + 
-                                     'Len: ' + str(len(sample)))
+                            and pupil_outlet):
+                        eyeid = payload['id']                        
+                        sample = _generate_primitive_sample(payload)                    
+                        pupil_buffer = _update_buffer(eyeid, 
+                                                      pupil_buffer,
+                                                      sample)
+                        new_sample = buffer2sample(pupil_buffer)
+                        pupil_outlet.push_sample(new_sample)
+                        
+                        logger.debug('send at ' + str(new_sample[-1]))
                         # del outlet  # delete reference
 
                     elif (topic.startswith(NOTIFY_SUB_TOPIC)
@@ -244,7 +246,7 @@ class Pupil_Diameter_LSL_Relay(Plugin):
                     elif cmd == 'Subscribe':
                         topic = pipe.recv_string()
                         inlet.subscribe(topic)
-                        if topic == PUPIL_SUB_TOPIC and not pupil_outlets:
+                        if topic == PUPIL_SUB_TOPIC and not pupil_outlet:
                             pupil_outlets = self._create_pupil_lsl_outlets()
                         elif (topic == NOTIFY_SUB_TOPIC
                               and not notification_outlet):
@@ -325,6 +327,39 @@ def _generate_primitive_sample(payload):
     """
     return (payload.get('diameter', -1.0),
             payload['confidence'],
-            payload['timestamp'],
-            payload['norm_pos'][0],
-            payload['norm_pos'][1])       
+            payload['timestamp'])       
+    
+def _create_buffer():
+    '''create the initial buffer for the current pupil diameter
+    
+    returns
+    -------
+    buffer: list
+        a list of two tuples, each tuple representing each eyes buffer
+        each tuple contains the last diameter, its confidence and the timestamp
+        of this buffered values
+    '''
+    
+    t0 = lsl.local_clock()
+    return [ (-1., 0., t0), (-1., 0., t0)]
+
+
+def buffer2sample(buffer):
+    sample = [buffer[0][0], buffer[1][0], # diametees
+              buffer[0][1], buffer[1][1], #confidences
+              max(buffer[0][2], buffer[1][2])] #most recent timestamp
+    
+    return sample
+
+def _update_buffer(eyeid:int, buffer:list, sample:tuple):
+    buffer[eyeid] = sample
+    return buffer
+    
+    
+    
+'''
+publish once after each update -> consequence is roughly double the 
+sampling rate of ~<125 Hz to ~<250 Hz
+1/ ( (timestamp[-1]-timestamp[0])/np.asanyarray(chunk).shape[0] )
+'''
+    
